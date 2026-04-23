@@ -14,6 +14,7 @@ from picamera2 import Picamera2
 import hailo
 import json
 import os
+from collections import deque
 
 import hailo_platform as hpf
 
@@ -23,7 +24,7 @@ import hailo_platform as hpf
 from scipy.spatial.transform import Rotation as R
 import requests
 from serial_reader_2 import get_latest_sensor_data, stop_serial_reader
-from threaded_capture import start_capture_threads, stop_capture_threads, get_latest_images
+from threaded_capture import start_capture_threads, stop_capture_threads, get_latest_images, get_capture_fps
 from setup import setup_all_systems
 from drawing_utils import draw_detections
 from resize_image import resize_image
@@ -40,6 +41,7 @@ camera_data_raw = "camera_data_raw.txt"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 BRIDGE_PATH = os.path.join(BASE_DIR, "ui_bridge.json")
+BRIDGE_TMP_PATH = os.path.join(BASE_DIR, "ui_bridge.tmp.json")
 SAVE_PATH = os.path.join(STATIC_DIR, "latest_detection.jpg")
 TMP_PATH = os.path.join(STATIC_DIR, "latest_detection_tmp.jpg")
 
@@ -75,6 +77,47 @@ def send_ntfy_alert(image_path, heading, coords):
     except Exception as e:
         print(f"Failed to send notification: {e}")
 
+
+def extract_candidate_detections(raw_detections):
+    arr = np.squeeze(raw_detections)
+    if arr.ndim == 1:
+        return [arr]
+    if arr.ndim == 2:
+        if arr.shape[1] >= 5:
+            return arr
+        if arr.shape[0] >= 5:
+            return arr.T
+    return []
+
+
+def write_bridge_json(gps_lat, gps_lng, gps_alt, sys_direction, sys_dir_letter, drone_found, capture_fps, inference_fps):
+    bridge_data = {
+        "gps": {
+            "lat": gps_lat if gps_lat is not None else 0.0,
+            "lng": gps_lng if gps_lng is not None else 0.0,
+            "alt": gps_alt if gps_alt is not None else 0.0
+        },
+        "imu": {
+            "heading": round(sys_direction, 1) if sys_direction is not None else 0.0,
+            "dir": sys_dir_letter if sys_dir_letter else "N"
+        },
+        "status": {
+            "drone_detected": bool(drone_found)
+        },
+        "fps": {
+            "capture_cam0": capture_fps.get("cam0", 0.0),
+            "capture_cam1": capture_fps.get("cam1", 0.0),
+            "inference": round(inference_fps, 2)
+        },
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "meta": {
+            "producer": "real"
+        }
+    }
+    with open(BRIDGE_TMP_PATH, "w") as f:
+        json.dump(bridge_data, f)
+    os.replace(BRIDGE_TMP_PATH, BRIDGE_PATH)
+
 if __name__ == "__main__":
     picam2_cam1, picam2_cam0 = None, None
     setup_successful = False
@@ -92,6 +135,7 @@ if __name__ == "__main__":
     
     try:
         last_process_time = time.time()
+        inference_fps_samples = deque(maxlen=30)
         image_cam1, image_cam0 = None, None
         sys_dir_letter, sys_direction = None, None
         gps_lat, gps_lng, gps_alt = None, None, None
@@ -193,6 +237,7 @@ if __name__ == "__main__":
                             last_process_time = time.time()
                         image_cam1_rgb, image_cam0_rgb = get_latest_images()
                         if image_cam1_rgb is not None and image_cam0_rgb is not None:
+                            infer_start = time.time()
                             
                             resized_frame_1 = cv2.resize(image_cam1_rgb, (640, 640))
                             
@@ -205,24 +250,28 @@ if __name__ == "__main__":
                             
                             output_name = list(results.keys())[0]
                             detections = results[output_name][0]
-                            
-                            detections = np.squeeze(detections).T
-                            
-                            print(f"New Shape: {detections.shape}")
+                            candidates = extract_candidate_detections(detections)
+                            print(f"Detections parsed: {len(candidates)}")
                             
                             img_w = 640
                             img_h = 640
                             
-                            for i , det in enumerate(detections):
-                                ymin, xmin, ymax, xmax, confidence = detections
+                            for i, det in enumerate(candidates):
+                                if len(det) < 5:
+                                    continue
+                                ymin, xmin, ymax, xmax, confidence = det[:5]
+                                try:
+                                    confidence = float(confidence)
+                                except (TypeError, ValueError):
+                                    continue
                                 print(f"Confidence of object detected: {confidence}")
                                 if confidence > 0.5:
                                     drone_found = True # Target acquired
                                     print(f"Object {i} found with confidence: {confidence:.2f}")
-                                    left = int(xmin*img_w)
-                                    top = int(ymin*img_h)
-                                    right = int(xmax * img_w)
-                                    bottom = int(ymax*img_h)
+                                    left = int(float(xmin) * img_w)
+                                    top = int(float(ymin) * img_h)
+                                    right = int(float(xmax) * img_w)
+                                    bottom = int(float(ymax) * img_h)
                                     
                                     print("Detection Made")
                                     
@@ -230,17 +279,25 @@ if __name__ == "__main__":
                                     
                                     label = f"{confidence:.2f}"
                                     cv2.putText(resized_frame_1, label, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+                            infer_duration = time.time() - infer_start
+                            if infer_duration > 0:
+                                inference_fps_samples.append(1.0 / infer_duration)
+                            inference_fps = sum(inference_fps_samples) / len(inference_fps_samples) if inference_fps_samples else 0.0
                             
                             display_frame = cv2.cvtColor(resized_frame_1, cv2.COLOR_RGB2BGR)
                             
                             # --- UI BRIDGE UPDATE ---
-                            bridge_data = {
-                                "gps": {"lat": str(gps_lat), "lng": str(gps_lng)},
-                                "imu": {"heading": str(round(sys_direction, 1)) if sys_direction is not None else "0", "dir": sys_dir_letter if sys_dir_letter else "N"},
-                                "status": {"drone_detected": drone_found}
-                            }
-                            with open(BRIDGE_PATH, "w") as f:
-                                json.dump(bridge_data, f)
+                            write_bridge_json(
+                                gps_lat,
+                                gps_lng,
+                                gps_alt,
+                                sys_direction,
+                                sys_dir_letter,
+                                drone_found,
+                                get_capture_fps(),
+                                inference_fps
+                            )
                             
                             # --- WEB HUD UPDATE ---
                             cv2.imwrite(TMP_PATH, display_frame)

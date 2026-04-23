@@ -1,1 +1,23 @@
-{"gps": {"lat": "33.4504", "lng": "-88.8184"}, "imu": {"heading": "285", "dir": "W"}, "status": {"drone_detected": false}}
+{
+    "gps": {
+        "lat": 0.0,
+        "lng": 0.0,
+        "alt": 0.0
+    },
+    "imu": {
+        "heading": 0.0,
+        "dir": "N"
+    },
+    "status": {
+        "drone_detected": false
+    },
+    "fps": {
+        "capture_cam0": 0.0,
+        "capture_cam1": 0.0,
+        "inference": 0.0
+    },
+    "timestamp": "",
+    "meta": {
+        "producer": "real"
+    }
+}
