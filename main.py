@@ -59,23 +59,29 @@ def get_cardinal_dir(degree):
 
 def send_ntfy_alert(image_path, heading, coords):
     try:
-        title = "🚨 SpyNo-SAARUS: TARGET ACQUIRED"
+        # Removed raw emoji and .encode() to prevent HTTP header crashes
+        title = "SpyNo-SAARUS: TARGET ACQUIRED"
         message = f"Detection at {coords}. Heading: {heading}."
+        
         with open(image_path, "rb") as f:
-            requests.post(
+            response = requests.post(
                 NTFY_URL,
                 data=f,
                 headers={
-                    "Title": title.encode('utf-8'),
-                    "Message": message.encode('utf-8'),
+                    "Title": title,
+                    "X-Message": message, # Use X-Message when attaching a file
                     "Priority": "5",
-                    "Tags": "warning,drone,target_locked".encode('utf-8'),
+                    "Tags": "warning,drone,target_locked,rotating_light", # rotating_light adds the 🚨
                     "Filename": "drone_capture.jpg"
                 },
                 timeout=10
             )
+            # Actually print the server's response so we know it worked
+            print(f"\n>>> NTFY STATUS: {response.status_code} - {response.text}\n")
+            
     except Exception as e:
-        print(f"Failed to send notification: {e}")
+        # Added borders so this doesn't get lost in the GPS/IMU terminal spam
+        print(f"\n{'='*40}\n🚨 NOTIFICATION FAILED: {e}\n{'='*40}\n")
 
 
 def extract_candidate_detections(raw_detections):
@@ -303,10 +309,14 @@ if __name__ == "__main__":
                             cv2.imwrite(TMP_PATH, display_frame)
                             os.replace(TMP_PATH, SAVE_PATH)
 
-                            # --- NOTIFICATION TRIGGER ---
+                            # --- NOTIFICATION TRIGGER --- #
+
                             if drone_found and not last_detection_state:
-                                send_ntfy_alert(SAVE_PATH, f"{round(sys_direction, 1)} {sys_dir_letter}", f"{gps_lat}, {gps_lng}")
-                            
+                                # Protect against a crash if a drone is found before the first IMU reading
+                                safe_heading = round(sys_direction, 1) if sys_direction is not None else "Calculating..."
+                                safe_letter = sys_dir_letter if sys_dir_letter is not None else "N/A"
+                                
+                                send_ntfy_alert(SAVE_PATH, f"{safe_heading} {safe_letter}", f"{gps_lat}, {gps_lng}")
                             last_detection_state = drone_found
 
                             cv2.imshow("Hailo-8L Inference", display_frame)

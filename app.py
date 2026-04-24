@@ -15,7 +15,7 @@ BRIDGE_PATH = os.path.join(BASE_DIR, "ui_bridge.json")
 BRIDGE_TMP_PATH = os.path.join(BASE_DIR, "ui_bridge.tmp.json")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 LATEST_IMAGE_PATH = os.path.join(STATIC_DIR, "latest_detection.jpg")
-TAILSCALE_HOST = os.getenv("APP_HOST", "100.116.184.23")
+TAILSCALE_HOST = os.getenv("APP_HOST", "100.72.170.79")
 APP_PORT = int(os.getenv("APP_PORT", "5000"))
 MOCK_MODE = os.getenv("MOCK_MODE", "0") == "1"
 BRIDGE_STALE_SECONDS = float(os.getenv("BRIDGE_STALE_SECONDS", "3.0"))
